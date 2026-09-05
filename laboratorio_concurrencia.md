@@ -88,3 +88,41 @@ Para romper el ciclo, el motor selecciona automáticamente una de las transaccio
 | **Qué se modificó o descartó, y por qué** | No se realizaron modificaciones, la explicación técnica abordó correctamente el error observado (40P01). |
 | **Verificación realizada** | Se forzó un abrazo mortal cruzando bloqueos de actualización sobre los IDs 2 y 4 en dos sesiones distintas. Se comprobó que el motor intervino automáticamente cancelando una de las transacciones y emitiendo el error 40P01, tal como indica la teoría. |
 
+## Escenario 3: Prevención de Lecturas Sucias
+
+### 1. Scripts Ejecutados
+**Paso 1 - Sesión A:**
+```sql
+BEGIN;
+UPDATE cliente SET nombre = 'Juan Modificado' WHERE id_cliente = 2;
+-- (La transacción queda abierta, sin confirmar)
+```
+
+**Paso 2 - Sesión B:**
+```sql
+-- Retorna los datos originales instantáneamente, sin bloqueos ni esperas
+SELECT * FROM cliente WHERE id_cliente = 2;
+```
+
+**Limpieza (Sesión A):**
+```sql
+ROLLBACK;
+```
+
+### 2. Justificación Teórica
+En PostgreSQL, el modelo de control de concurrencia multiversión (MVCC) y el nivel de aislamiento por defecto (Read Committed) eliminan por completo la posibilidad de Lecturas Sucias (Dirty Reads). Cada vez que una Sesión A ejecuta un UPDATE, el motor no sobreescribe físicamente la fila existente en el disco; en su lugar, crea una nueva versión de la tupla (tuple version) etiquetada con el identificador de la transacción que la generó (xmin). Mientras la transacción de la Sesión A permanezca abierta (sin COMMIT), esa nueva versión de la fila es invisible para el resto de las conexiones del sistema.
+
+Bajo el nivel Read Committed, cada sentencia SQL individual obtiene una instantánea (snapshot) del estado de la base de datos en el instante exacto en que comienza a ejecutarse. Cuando la Sesión B realiza un SELECT sobre el registro en cuestión, el motor evalúa las reglas de visibilidad de tuplas: detecta que la nueva versión pertenece a una transacción no confirmada (en curso) y, por lo tanto, la descarta de inmediato, resolviendo la consulta a partir de la versión anterior que sí cuenta con un COMMIT confirmado. De este modo, la Sesión B observa siempre una vista consistente y real de los datos sin acceder a cambios volátiles o no confirmados.
+
+Este diseño permite que la Sesión B no sufra ningún tipo de bloqueo ni demora (Lock Wait), haciendo realidad el principio fundamental de MVCC en PostgreSQL: "los lectores nunca bloquean a los escritores, y los escritores nunca bloquean a los lectores". Mientras que la sentencia UPDATE adquiere un bloqueo exclusivo a nivel de fila para evitar modificaciones concurrentes por otros escritores, las consultas de lectura estándar (SELECT) únicamente adquieren un bloqueo compartido a nivel de tabla (AccessShareLock), el cual no entra en conflicto con las escrituras en curso ni requiere esperar a que la Sesión A finalice.
+
+### 3. Declaración de Uso de IA (DUIA) - Escenario 3
+
+| Campo | Completar |
+| :--- | :--- |
+| **Herramienta** | OpenCode (Gemini 3.5 Flash) |
+| **Spec o prompt utilizado** | Escribí una breve justificación teórica explicando cómo el nivel de aislamiento por defecto (Read Committed) y el modelo MVCC previenen las 'Lecturas Sucias'. Explicá por qué una Sesión B sigue viendo los datos originales y no se bloquea ante un UPDATE sin COMMIT de una Sesión A. |
+| **Qué generó** | Una explicación sobre el modelo MVCC, la generación de versiones de tuplas, snapshots y cómo los lectores no bloquean a los escritores en PostgreSQL. |
+| **Qué se aceptó** | Se aceptó el texto íntegramente. |
+| **Qué se modificó o descartó, y por qué** | No se realizaron modificaciones, la explicación describe perfectamente la ausencia de bloqueos observada en la prueba. |
+| **Verificación realizada** | Se realizó un UPDATE en la Sesión A sin confirmar y un SELECT simultáneo en la Sesión B. Se comprobó que la consulta de lectura retornó la versión original de forma instantánea, validando el comportamiento MVCC. |
